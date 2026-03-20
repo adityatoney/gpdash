@@ -7,6 +7,19 @@ I have multi-year GP (Guru Purnima) event data spanning 2022 to 2025 across thre
 The data is unorganized and inconsistent across years — likely different column names, formats, and structures between files. My goal is a clean multi-year analysis and an interactive dashboard.
 
 ---
+Analyze and give the overall understanding of the xslx. Based on context of the project
+
+I have multi-year GP (Guru Purnima) event data spanning 2022 to 2025 across multiple data sources. The data is unorganized and inconsistent across years — likely different column names, formats, and structures between files. My goal is a clean multi-year analysis and an interactive dashboard.
+
+Plan:
+1. ⁠Identify columns or based entities that are common throughout
+2. ⁠Design the aux data from each year
+3. ⁠Come with relational mapping for different data and their aux tables
+4. ⁠For the missing data, you need to identify and impute these, make sure you also generate data discrepancy heat map us to be aware about it
+5. ⁠Make proposal on DB schema, based on SQL data base postgres DB
+6. ⁠DB schema should be mermaid output.
+
+---
 
 TECH STACK
 

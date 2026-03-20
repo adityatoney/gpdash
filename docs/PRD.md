@@ -4,8 +4,8 @@
 
 | Field | Value |
 |---|---|
-| Version | 1.0 |
-| Date | 2026-03-16 |
+| Version | 2.0 |
+| Date | 2026-03-19 |
 | Status | Draft |
 | Source | `docs/prompt.md` |
 
@@ -37,12 +37,12 @@
 
 ## 1. Executive Summary
 
-gpdash is a local-first analytics dashboard for multi-year Guru Purnima (GP) event data spanning 2022–2025. The project ingests unstructured Excel files covering attendee registrations, room allocations, and food/dining preferences, normalizes them through a Python ETL agent, stores the cleaned data in Convex DB, and surfaces interactive visualizations and AI-powered insights through a React + Vite frontend backed by a Node.js/Express API.
+gpdash is a local-first analytics dashboard for multi-year Guru Purnima (GP) event data spanning 2022–2025. The project ingests 9 Excel files covering attendee registrations, room allocations, food/dining scans, and event dashboards, normalizes them through a Python ETL pipeline, stores the cleaned data in a local PostgreSQL database (26 normalized tables), and surfaces interactive visualizations and AI-powered insights through a React + Vite frontend backed by a Node.js/Express API.
 
 ### Key Deliverables
 
-- **Python ETL Agent** — standalone, re-runnable pipeline that discovers, cleans, normalizes, and loads multi-year event data into Convex DB while reporting progress in real time.
-- **Convex Database** — real-time queryable store of normalized attendee, room, and meal records plus agent job status and cached aggregations.
+- **PostgreSQL Database** — normalized relational schema with 26 tables (6 reference, 7 core, 8 auxiliary, 5 system) storing ~170K rows across 4 event years. Runs locally via Docker.
+- **Python ETL Pipeline** — re-runnable pipeline (`etl/`) that reads xlsx files, normalizes columns across years, resolves person identity, and loads into PostgreSQL. CLI-driven with per-year and full-load modes.
 - **Node.js API** — Express server exposing REST endpoints for dashboard queries, agent orchestration, and AI-powered Q&A.
 - **React Dashboard** — 6-tab interactive UI with filters, charts, exportable tables, and a natural-language AI Insights panel.
 - **Markdown Analysis Report** — Claude-generated narrative report with key statistics, trend highlights, and data quality notes, written to local disk.
@@ -61,7 +61,7 @@ GP event data is scattered across multiple Excel files with inconsistent column 
 
 | # | Goal | Success Indicator |
 |---|------|-------------------|
-| G1 | Unify 4 years of GP data into a single, clean, queryable dataset | All 6 source files ingested; unified schema covers registrations, rooms, and meals with a `year` column |
+| G1 | Unify 4 years of GP data into a single, clean, queryable dataset | All 9 source files ingested into 26 PostgreSQL tables; unified schema covers registrations, rooms, meals, and auxiliary data with `event_year` column |
 | G2 | Surface year-over-year trends in registration, rooms, and dining | Dashboard shows line/bar charts for all three data types across 2022–2025; YoY growth rates calculated |
 | G3 | Provide AI-powered natural-language Q&A over the data | User can type a plain-English question and receive a contextual answer from Claude within the dashboard |
 | G4 | Enable data export for offline planning | Every data table and chart is exportable to CSV; markdown analysis report written to local disk |
@@ -115,37 +115,46 @@ GP event data is scattered across multiple Excel files with inconsistent column 
 
 ### File Inventory
 
-| # | File Name | Year | Data Type(s) | Size | Notes |
-|---|-----------|------|-------------|------|-------|
-| 1 | `gp2022_registrations_and_room_pickups.xlsx` | 2022 | Registrations + Rooms | 835 KB | Combined file — may need split during ETL |
-| 2 | `gp2022_food_preferences.xlsx` | 2022 | Food/Dining | 912 KB | |
-| 3 | `gp2023_event_registrations_and_room_pickups.xlsx` | 2023 | Registrations + Rooms | 1.3 MB | Largest registration file |
-| 4 | `Gp2024_event_dashboard.xlsx` | 2024 | Unknown (likely combined) | 301 KB | **Caution:** filename suggests a dashboard export, not raw data. Structure must be inspected in Phase 1. May contain registrations, rooms, meals, or aggregated summaries. |
-| 5 | `gp2025_food_preferences.xlsx` | 2025 | Food/Dining | 5.1 MB | Largest file overall — may contain multiple sheets or embedded images |
-| 6 | `gp2025_room_analysis.xlsx` | 2025 | Rooms | 511 KB | Named "analysis" — may contain derived data, not just raw allocations |
+| # | File Name | Year | Data Type(s) | Size | Sheets | Notes |
+|---|-----------|------|-------------|------|--------|-------|
+| 1 | `gp2022_registrations_and_room_pickups.xlsx` | 2022 | Registrations + Rooms | 835 KB | 2 | `Registration-CheckIn-RoomAcc by` (2,657 rows, 54 cols) + `Room Stats - Booked vs Pickedup` |
+| 2 | `gp2022_food_preferences.xlsx` | 2022 | Food/Dining | 912 KB | 10 | `Pivot Data - ALL` (6,015 rows), `Pivot Data - Gurupujan` (404 rows), + trend/chart sheets |
+| 3 | `gp2023_event_registrations_and_room_pickups.xlsx` | 2023 | Registrations + Rooms | 1.3 MB | 3 | Identical structure to 2022; 3,574 rows |
+| 4 | `gp2024_event_dashboard.xlsx` | 2024 | Dashboard (aggregated) | 301 KB | 6 | **No raw data** — contains pre-aggregated dashboard summaries, hotel pickup stats, food pref charts |
+| 5 | `gp2024_scanning_analysis.xlsx` | 2024 | Food scanning (aggregated) | 16 KB | 2 | Daily meal counts + meal conflict matrices |
+| 6 | `gp2025_registrations.xlsx` | 2025 | Registrations + Youth + Bhakti + Rooms + Exceptions | 8.5 MB | 15 | `Data` (7,229 rows, 70 cols), `Rooms` (1,742), `BMHT+LMHT` (172), `YMHT` (155), `Bhakti` (170), `Special Needs` (133), `Translation` (535), `Exceptions` (1,419), + more |
+| 7 | `gp2025_food_preferences.xlsx` | 2025 | Food/Dining (individual scans) | 5.1 MB | 5 | `All Data` (46,755 individual scans with person link), + summarized sheets |
+| 8 | `gp2025_room_analysis.xlsx` | 2025 | Rooms (detailed) | 511 KB | 3 | `Data` (1,344 rows, 40 cols) — room details with financial data, accessibility flags |
+| 9 | `gp2025_event_dashboard.xlsx` | 2025 | Dashboard | 657 KB | 2 | `Report` + `Date wise Attendees` |
 
 ### Year × Data-Type Coverage Matrix
 
-| Year | Registrations | Rooms | Food/Dining |
-|------|:------------:|:-----:|:-----------:|
-| 2022 | ✅ (file 1) | ✅ (file 1) | ✅ (file 2) |
-| 2023 | ✅ (file 3) | ✅ (file 3) | ❌ **GAP** |
-| 2024 | ❓ (file 4 — unknown) | ❓ (file 4 — unknown) | ❓ (file 4 — unknown) |
-| 2025 | ❌ **GAP** | ✅ (file 6) | ✅ (file 5) |
+| Year | Registrations | Rooms | Food/Dining | Dashboard |
+|------|:------------:|:-----:|:-----------:|:---------:|
+| 2022 | ✅ Individual (2,657) | ✅ Individual (2,187) | ✅ Aggregated (6,015 pivot) | — |
+| 2023 | ✅ Individual (3,574) | ✅ Individual (2,442) | ❌ **NONE** | — |
+| 2024 | ❌ Summary only | ❌ Summary only | ✅ Aggregated (216 daily) | ✅ (6 sheets) |
+| 2025 | ✅ Individual (4,396 + 327 youth) | ✅ Individual (1,558) | ✅ Individual (46,755 scans) | ✅ (2 sheets) |
 
-### Known Data Gaps
+### Known Data Gaps & Imputation Strategy
 
-1. **2023 Food Preferences** — No food file exists for 2023. Dining trend analysis for 2023 will show "Data Not Available." The ETL agent must handle this gracefully and the dashboard must display a clear "No data" indicator rather than an empty chart.
-2. **2025 Registrations** — No registration file exists for 2025. Attendance trends will only cover 2022–2024 (or 2022–2023 if 2024 is unusable). Cross-dataset analysis (registrations vs rooms) cannot be performed for 2025.
-3. **2024 Unknown Structure** — The `Gp2024_event_dashboard.xlsx` file may not contain raw data. Phase 1 must inspect this file and determine: (a) which data types it covers, (b) whether data is raw or aggregated, (c) whether it can be mapped to the unified schema.
+| Gap | Impact | Strategy |
+|-----|--------|----------|
+| 2023 food data | No meal analysis for 2023 | `data_availability` marks as `data_level = 'none'`. Dashboard shows "Not Available" banner. Cannot impute. |
+| 2024 registration/room raw data | No individual records for 2024 | Use `dashboard_snapshots` for aggregate totals. Individual queries return empty with explanation. |
+| 2022/2023 missing MahatmaID | Cannot link to 2025 person records by MahatmaID | Cross-reference by `FamilyID + LOWER(first_name) + LOWER(last_name)` to backfill where possible |
+| 2025 missing BirthMonth/BirthYear | Cannot compute exact age for 2025 attendees | Only `AgeAtEvent` available. Store age, leave birth fields NULL |
+| 2025 missing FamilyEmailAddress | Cannot use email for dedup in 2025 | Not collected in 2025 registration system. Leave NULL |
+| 2022/2023 missing Address fields | No street-level address for early years | Not collected. Leave NULL |
+| 2025 arrival/departure dates | Stored as one-hot boolean columns, not date fields | Parse one-hot columns (e.g., "First Day at GP - 2025-07-05") to derive dates |
 
 ### Data Quality Risks
 
-- **Inconsistent column naming** — the prompt explicitly warns that column names vary across years (e.g., "First Name" vs "fname" vs "FirstName"). Phase 1 must catalog all column names and propose a mapping.
-- **Date format variance** — arrival/departure, check-in/check-out dates likely use different formats across files.
-- **Duplicate records** — attendees may appear multiple times within a file; deduplication key (e.g., email + year) must be defined in Phase 1.
-- **Combined files** — files 1 and 3 combine registrations and rooms; the ETL agent must split them into separate logical tables.
-- **Filename casing** — file 4 uses `Gp` (capitalized) while others use `gp`. The agent must handle case-insensitive file matching.
+- **Inconsistent column naming** — Column names vary across years (e.g., `Gender` vs `GenderMF`, `Zipcode` vs `PostalCode`, `regionID` (numeric) vs `Region` (string)). All mappings are encoded in `etl/load_*.py` loaders.
+- **Date format variance** — Dates appear as Excel datetime objects, `MM/DD/YYYY` strings, and `YYYY-MM-DD` strings. The ETL `safe_date()` handles all formats.
+- **Duplicate records** — Attendees may appear across years; deduplication uses `MahatmaID` (2025) or `FamilyID + name` (2022/2023). 1,766 returning attendees detected across years.
+- **Combined files** — 2022 and 2023 files combine registrations + rooms in 54-column rows; ETL splits cols 1–44 → person+registration, cols 45–54 → rooms.
+- **Room data overlap** — 2025 has room data in both `gp2025_registrations.xlsx` Rooms sheet and `gp2025_room_analysis.xlsx`. ETL uses room_analysis as primary, supplements with registration Rooms sheet.
 
 ---
 
@@ -157,35 +166,35 @@ GP event data is scattered across multiple Excel files with inconsistent column 
 ┌─────────────────────────────────────────────────────────────────────┐
 │                          LOCAL MACHINE                              │
 │                                                                     │
-│  ┌──────────────┐     HTTP      ┌──────────────┐    Convex SDK     │
-│  │              │  ──────────▶  │              │  ──────────────▶   │
-│  │   React +    │               │  Express.js  │               ┌───┴───┐
-│  │   Vite       │  ◀──────────  │  API Server  │  ◀────────────│Convex │
-│  │   Frontend   │     JSON      │              │    Real-time   │  DB   │
-│  │              │               │              │    Queries     │(cloud)│
-│  └──────┬───────┘               └──────┬───────┘               └───┬───┘
-│         │                              │                           │
-│         │  Convex real-time            │  POST /api/agent/run      │
-│         │  subscriptions               │  (spawn subprocess)       │
-│         │         ┌────────────────────┘                           │
-│         │         ▼                                                │
-│         │   ┌──────────────┐    Convex Python SDK                 │
-│         │   │   Python     │  ─────────────────────────────────▶  │
-│         │   │   ETL Agent  │                                      │
-│         │   │              │  ──▶  Anthropic API (Claude)         │
-│         │   │              │  ──▶  Open Model (Ollama / API)      │
-│         │   └──────┬───────┘                                      │
-│         │          │                                               │
-│         │          ▼                                               │
-│         │   ┌──────────────┐                                      │
-│         │   │  Local Files │                                      │
-│         │   │  - raw xlsx  │                                      │
-│         │   │  - tmp/      │                                      │
-│         │   │  - reports/  │                                      │
-│         │   │  - exports/  │                                      │
-│         │   └──────────────┘                                      │
-│         │                                                          │
-└─────────┴──────────────────────────────────────────────────────────┘
+│  ┌──────────────┐     HTTP      ┌──────────────┐    SQL (pg)      │
+│  │              │  ──────────▶  │              │  ──────────────▶  │
+│  │   React +    │               │  Express.js  │               ┌───┴────┐
+│  │   Vite       │  ◀──────────  │  API Server  │  ◀────────────│Postgres│
+│  │   Frontend   │     JSON      │              │    Queries     │(Docker)│
+│  │              │               │              │                │:5433   │
+│  └──────────────┘               └──────┬───────┘               └───┬────┘
+│                                        │                           │
+│                                        │  POST /api/agent/run      │
+│                                        │  (spawn subprocess)       │
+│                          ┌─────────────┘                           │
+│                          ▼                                         │
+│                    ┌──────────────┐    SQL (psycopg2)             │
+│                    │   Python     │  ─────────────────────────▶   │
+│                    │   ETL Agent  │                                │
+│                    │              │  ──▶  Anthropic API (Claude)   │
+│                    │              │  ──▶  Open Model (Ollama)      │
+│                    └──────┬───────┘                                │
+│                           │                                        │
+│                           ▼                                        │
+│                    ┌──────────────┐                                │
+│                    │  Local Files │                                │
+│                    │  - raw xlsx  │                                │
+│                    │  - tmp/      │                                │
+│                    │  - reports/  │                                │
+│                    │  - exports/  │                                │
+│                    └──────────────┘                                │
+│                                                                    │
+└────────────────────────────────────────────────────────────────────┘
 ```
 
 ### Data Flow (6 Steps)
@@ -193,23 +202,23 @@ GP event data is scattered across multiple Excel files with inconsistent column 
 | Step | From | To | Action |
 |------|------|----|--------|
 | 1 | User | Local filesystem | Places `.xlsx` files in `docs/event_docs/` |
-| 2 | React UI | Express API | User clicks "Run Agent" → `POST /api/agent/run` |
-| 3 | Express API | Python Agent | Express spawns Python agent as a child process |
-| 4 | Python Agent | Convex DB | Agent reads `.xlsx` files, cleans data, writes normalized records to Convex tables; updates `agent_jobs` status at each step |
-| 5 | Convex DB | React UI | Dashboard subscribes to Convex real-time updates; agent progress and data appear live |
-| 6 | Python Agent | Local disk | Agent writes `.md` report to `reports/` and CSV backup to `exports/` |
+| 2 | User | CLI | Runs `python -m etl.run` to execute ETL pipeline (or triggers via Express API) |
+| 3 | Python ETL | PostgreSQL | ETL reads xlsx files, normalizes data, writes to 26 tables; seeds reference data, loads per-year records, tracks progress in `agent_jobs` |
+| 4 | React UI | Express API | Dashboard queries data via REST endpoints |
+| 5 | Express API | PostgreSQL | Express queries PostgreSQL with SQL, returns JSON to frontend |
+| 6 | Python ETL | Local disk | ETL can write `.md` reports to `reports/` and CSV exports to `exports/` |
 
 ### Communication Protocol Table
 
 | Connection | Protocol | Library / Method |
 |------------|----------|-----------------|
 | React → Express | HTTP REST | `fetch` / Axios |
-| React → Convex | WebSocket (real-time subscriptions) | `convex/react` client |
-| Express → Convex | HTTP | `convex` Node SDK |
-| Express → Python Agent | Child process (`spawn`) | Node `child_process` |
-| Python Agent → Convex | HTTP | `convex` Python SDK |
-| Python Agent → Claude | HTTPS | `anthropic` Python SDK |
-| Python Agent → Open Model | HTTP | Ollama REST API or compatible |
+| Express → PostgreSQL | TCP (SQL) | `pg` / `node-postgres` |
+| Express → Python ETL | Child process (`spawn`) | Node `child_process` |
+| Python ETL → PostgreSQL | TCP (SQL) | `psycopg2` |
+| Python ETL → xlsx files | File I/O | `openpyxl` |
+| Python ETL → Claude | HTTPS | `anthropic` Python SDK |
+| Python ETL → Open Model | HTTP | Ollama REST API or compatible |
 | Express → Claude (Q&A) | HTTPS | `@anthropic-ai/sdk` Node SDK |
 
 ---
@@ -223,10 +232,13 @@ GP event data is scattered across multiple Excel files with inconsistent column 
 | Charting | Recharts (primary) or Chart.js | Recharts 2.x / Chart.js 4.x | Prompt specifies Recharts or Chart.js — not D3 directly. Recharts is React-native and simpler for declarative charts. | Chart.js requires a React wrapper (`react-chartjs-2`) |
 | UI Components | Tailwind CSS + shadcn/ui | Tailwind 3.x+ | Utility-first CSS for clean, non-technical look; shadcn provides accessible components | None |
 | Backend API | Express.js | 4.x | Lightweight, well-known; sufficient for local REST API | None |
-| Runtime | Node.js | 20.x LTS | Required for Express and Convex Node SDK | Use LTS for stability |
-| Database | Convex | Latest | Real-time subscriptions for live agent progress; managed cloud backend; schema validation | Requires internet connection; free tier limits may apply at scale |
-| ETL Agent | Python | 3.11+ | Best ecosystem for data wrangling (pandas, openpyxl) | Must be installed separately from Node |
-| Excel parsing | openpyxl / pandas | Latest | Handles `.xlsx` reading, multi-sheet support | Large files (5 MB) may be slow to parse |
+| Runtime | Node.js | 20.x LTS | Required for Express | Use LTS for stability |
+| Database | PostgreSQL | 16.x (Docker) | Normalized relational schema; powerful SQL for analytics; runs locally via Docker Compose on port 5433; no cloud dependency | Requires Docker Desktop |
+| DB Client (Python) | psycopg2-binary | 2.9+ | PostgreSQL adapter for Python ETL pipeline | None |
+| DB Client (Node) | pg (node-postgres) | 8.x | PostgreSQL client for Express API | None |
+| ETL Pipeline | Python | 3.9+ | Data wrangling with openpyxl; CLI-driven with per-year and full-load modes | Must be installed separately from Node |
+| Excel parsing | openpyxl | 3.1+ | Handles `.xlsx` reading, multi-sheet support, read-only mode for performance | Large files (8.5 MB) take ~10s to parse |
+| Config | python-dotenv | 1.0+ | Environment variable management for database URL | None |
 | AI (primary) | Anthropic Claude | claude-sonnet-4-6 / claude-haiku-4-5 | Natural language summaries, Q&A, report generation | Requires API key; cost per token |
 | AI (fallback) | Ollama (local) or open API | Latest | Batch classification, data labeling — cost-efficient | Requires local GPU or external endpoint |
 | Reports | Markdown | N/A | Human-readable, version-controllable output format | None |
@@ -239,148 +251,156 @@ GP event data is scattered across multiple Excel files with inconsistent column 
 
 | Data Category | Storage | Rationale |
 |---------------|---------|-----------|
-| Cleaned, normalized attendee/room/meal records | **Convex DB** | Queryable by dashboard in real time; supports filters and aggregations |
-| Agent job status and task logs | **Convex DB** | Frontend subscribes to live progress updates |
-| Filter/view preferences per user session | **Convex DB** | Persists across page refreshes |
-| Cached aggregations and trend summaries | **Convex DB** | Fast dashboard rendering without re-computing on every load |
+| Cleaned, normalized attendee/room/meal records | **PostgreSQL** (7 core tables) | Fully normalized relational schema; powerful SQL for analytics; local-only, no cloud dependency |
+| Reference data (regions, centers, hotels, etc.) | **PostgreSQL** (6 `ref_*` tables) | Normalized lookup tables populated from xlsx data during ETL seeding |
+| Auxiliary data (youth, bhakti, special needs, etc.) | **PostgreSQL** (8 aux tables) | Year-specific or entity-specific extensions linked to core tables |
+| Agent job status and task logs | **PostgreSQL** (`agent_jobs`, `agent_job_steps`) | Queryable from both Python ETL and Express API |
+| Filter/view preferences per user session | **PostgreSQL** (`user_preferences`) | Persists across page refreshes |
+| Cached aggregations and trend summaries | **PostgreSQL** (`aggregation_cache`, `dashboard_snapshots`, `meal_aggregates`) | Fast dashboard rendering; pre-computed summaries |
+| Data gap tracking | **PostgreSQL** (`data_availability`) | Documents what data exists per year per entity type |
 | Raw uploaded `.xlsx` files | **Local filesystem** (`docs/event_docs/`) | No need to store binary blobs in DB |
-| Intermediate processing files | **Local filesystem** (`tmp/`) | Disposable; agent creates and deletes during ETL |
 | Final markdown reports | **Local filesystem** (`reports/`) | Written by agent; user reads/shares directly |
 | CSV/Excel backups | **Local filesystem** (`exports/`) | Offline backup of cleaned data |
 
-### Convex Schema — 7 Tables
+### PostgreSQL Schema — 26 Tables
 
-#### `events`
+The full DDL is in `db/schema.sql`. The detailed design document with entity mapping, discrepancy matrix, and ER diagram is in `docs/db_design.md`.
 
-Stores metadata for each GP event year.
+#### Table Classification
 
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| `year` | `number` | yes | Event year (2022, 2023, 2024, 2025) |
-| `name` | `string` | yes | Event display name, e.g., "Guru Purnima 2023" |
-| `startDate` | `string` | no | Event start date (ISO 8601) — derived from earliest arrival |
-| `endDate` | `string` | no | Event end date (ISO 8601) — derived from latest departure |
-| `totalRegistrations` | `number` | no | Cached count of attendees for this year |
-| `totalRoomNights` | `number` | no | Cached sum of room-nights for this year |
-| `dataGaps` | `array<string>` | no | List of missing data types, e.g., `["food"]` for 2023 |
-| `metadata` | `object` | no | Flexible field for additional event-level info |
-| `createdAt` | `number` | yes | Timestamp of record creation |
+| Category | Count | Tables |
+|----------|-------|--------|
+| **Reference** | 6 | `ref_regions`, `ref_centers`, `ref_food_preferences`, `ref_room_types`, `ref_age_groups`, `ref_hotels` |
+| **Core** | 7 | `events`, `persons`, `person_contacts`, `registrations`, `rooms`, `room_occupants`, `meal_scans` |
+| **Auxiliary** | 8 | `registration_youth`, `registration_lmht`, `registration_bhakti`, `special_needs_requests`, `translation_requests`, `registration_exceptions`, `dashboard_snapshots`, `meal_aggregates` |
+| **System** | 5 | `data_availability`, `agent_jobs`, `agent_job_steps`, `aggregation_cache`, `user_preferences` |
 
-#### `attendees`
+#### Core Tables (Summary)
 
-One record per attendee per year.
+##### `events`
+
+Stores metadata for each GP event year. Auto-populated with totals after ETL run.
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `eventYear` | `number` | yes | FK to `events.year` |
-| `firstName` | `string` | yes | Normalized first name |
-| `lastName` | `string` | yes | Normalized last name |
-| `email` | `string` | no | Used as dedup key (with year) |
-| `phone` | `string` | no | Contact number |
-| `region` | `string` | no | Region/zone — normalized to consistent values |
-| `city` | `string` | no | City of origin |
-| `arrivalDate` | `string` | no | ISO 8601 date |
-| `departureDate` | `string` | no | ISO 8601 date |
-| `lengthOfStay` | `number` | no | Computed: departure − arrival in days |
-| `specialNeeds` | `string` | no | Accessibility or dietary notes |
-| `isReturning` | `boolean` | no | True if email appears in a prior year |
-| `rawSourceFile` | `string` | yes | Original filename for traceability |
-| `createdAt` | `number` | yes | Timestamp |
+| `event_id` | `SERIAL` | PK | Auto-incrementing primary key |
+| `event_year` | `SMALLINT` | UK, yes | Event year (2022, 2023, 2024, 2025) |
+| `event_name` | `VARCHAR(100)` | yes | Event display name, e.g., "Guru Purnima 2023" |
+| `start_date` | `DATE` | no | Event start date |
+| `end_date` | `DATE` | no | Event end date |
+| `total_registrations` | `INTEGER` | no | Cached count of registrations (auto-updated after ETL) |
+| `total_room_bookings` | `INTEGER` | no | Cached count of room records |
+| `total_meal_scans` | `INTEGER` | no | Cached count of meal scan records |
+| `has_registration_data` | `BOOLEAN` | no | Whether individual registration data exists |
+| `has_room_data` | `BOOLEAN` | no | Whether individual room data exists |
+| `has_food_data` | `BOOLEAN` | no | Whether food/meal data exists |
+| `has_dashboard_data` | `BOOLEAN` | no | Whether dashboard snapshot data exists |
 
-#### `rooms`
+##### `persons`
 
-One record per room assignment.
+Central person table with deduplication across years. 2025 uses `MahatmaID` as the unique key; 2022/2023 use `FamilyID + LOWER(first_name) + LOWER(last_name)`.
 
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| `eventYear` | `number` | yes | FK to `events.year` |
-| `attendeeEmail` | `string` | no | FK to `attendees.email` (may be absent) |
-| `attendeeName` | `string` | no | Fallback identifier if email is missing |
-| `roomType` | `string` | yes | Normalized room type (e.g., "Single", "Double", "Suite") |
-| `roomNumber` | `string` | no | Room number or identifier |
-| `hotelName` | `string` | no | Hotel/venue name |
-| `checkInDate` | `string` | no | ISO 8601 date |
-| `checkOutDate` | `string` | no | ISO 8601 date |
-| `nightCount` | `number` | no | Computed: checkout − checkin in days |
-| `occupancy` | `number` | no | Number of guests in this room |
-| `rawSourceFile` | `string` | yes | Original filename |
-| `createdAt` | `number` | yes | Timestamp |
+| Key Fields | Type | Description |
+|------------|------|-------------|
+| `person_id` | `SERIAL PK` | Auto-incrementing primary key |
+| `mahatma_id` | `VARCHAR(50) UNIQUE` | Unique identifier from 2025 data |
+| `family_id` | `VARCHAR(50)` | Family grouping identifier |
+| `first_name`, `last_name` | `VARCHAR(100)` | Name fields (required) |
+| `gender` | `CHAR(1)` | Normalized to M/F |
+| `center_id` | `FK → ref_centers` | Attendee's center |
+| `region_id` | `FK → ref_regions` | Attendee's region |
 
-#### `meals`
+##### `registrations`
 
-One record per attendee per meal-day.
+One record per person per event year. Links to `persons` and `events`.
 
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| `eventYear` | `number` | yes | FK to `events.year` |
-| `attendeeEmail` | `string` | no | FK to `attendees.email` |
-| `attendeeName` | `string` | no | Fallback identifier |
-| `mealDate` | `string` | yes | ISO 8601 date |
-| `mealType` | `string` | no | "Breakfast", "Lunch", "Dinner", or "All" |
-| `preference` | `string` | no | Food preference (e.g., "Vegetarian", "Vegan") |
-| `optedIn` | `boolean` | yes | Whether the attendee opted in for this meal-day |
-| `rawSourceFile` | `string` | yes | Original filename |
-| `createdAt` | `number` | yes | Timestamp |
+| Key Fields | Type | Description |
+|------------|------|-------------|
+| `registration_id` | `SERIAL PK` | Auto-incrementing primary key |
+| `event_id` | `FK → events` | Which event |
+| `person_id` | `FK → persons` | Who registered |
+| `event_year` | `SMALLINT` | Denormalized for fast filtering |
+| `age_at_event` | `SMALLINT` | Age at time of event |
+| `age_group_id` | `FK → ref_age_groups` | Age group classification |
+| `food_pref_id` | `FK → ref_food_preferences` | Food preference |
+| `arrival_date`, `departure_date` | `DATE` | Stay dates (parsed from one-hot columns in 2025) |
+| `source_file` | `VARCHAR(200)` | Traceability |
+| Constraint | `UNIQUE (event_id, person_id)` | One registration per person per event |
 
-#### `agent_jobs`
+##### `rooms`
 
-Tracks ETL agent runs and their progress.
+One record per room booking. Links to `events`, `persons`, reference tables.
 
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| `jobId` | `string` | yes | Unique identifier (UUID) |
-| `status` | `string` | yes | One of: `"queued"`, `"running"`, `"completed"`, `"failed"` |
-| `phase` | `string` | no | Current phase: `"discovery"`, `"cleaning"`, `"analysis"`, `"reporting"` |
-| `progress` | `number` | no | 0–100 percentage |
-| `currentStep` | `string` | no | Human-readable description of current action |
-| `filesProcessed` | `array<string>` | no | List of files processed so far |
-| `errors` | `array<string>` | no | Error messages encountered |
-| `startedAt` | `number` | yes | Timestamp |
-| `completedAt` | `number` | no | Timestamp (set when done) |
-| `reportPath` | `string` | no | Local path to the generated `.md` report |
+| Key Fields | Type | Description |
+|------------|------|-------------|
+| `room_id` | `SERIAL PK` | Auto-incrementing primary key |
+| `event_id` | `FK → events` | Which event |
+| `primary_room_holder_id` | `FK → persons` | Primary occupant |
+| `room_type_requested_id`, `room_type_assigned_id` | `FK → ref_room_types` | Requested vs assigned type |
+| `hotel_id` | `FK → ref_hotels` | Hotel assignment |
+| `check_in_date`, `check_out_date` | `DATE` | Stay dates |
+| `invoiced_amount`, `paid_amount` | `NUMERIC(10,2)` | Financial data (2025 only) |
+| `source_file` | `VARCHAR(200)` | Traceability |
 
-#### `aggregations`
+##### `meal_scans`
 
-Pre-computed summaries for fast dashboard rendering.
+Individual meal scan records (2025: per-person; 2022: aggregated with `food_count`).
 
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| `key` | `string` | yes | Aggregation identifier, e.g., `"kpi_summary"`, `"registrations_by_year"`, `"meals_by_day_2023"` |
-| `eventYear` | `number` | no | Null for cross-year aggregations |
-| `dataType` | `string` | yes | `"registration"`, `"room"`, `"meal"`, `"cross"`, `"kpi"` |
-| `payload` | `object` | yes | The aggregated data (flexible JSON structure) |
-| `computedAt` | `number` | yes | Timestamp of last computation |
+| Key Fields | Type | Description |
+|------------|------|-------------|
+| `meal_scan_id` | `SERIAL PK` | Auto-incrementing primary key |
+| `event_id` | `FK → events` | Which event |
+| `person_id` | `FK → persons` | Who was scanned (NULL for aggregated 2022 data) |
+| `session_title` | `VARCHAR(200)` | Meal session name (Breakfast, Lunch, Dinner, etc.) |
+| `session_date` | `DATE` | Date of meal |
+| `food_consumed` | `VARCHAR(50)` | What was consumed (Regular, Jain, Western) |
+| `food_count` | `INTEGER` | Count (1 for individual scans, >1 for aggregated) |
 
-#### `user_preferences`
+#### Auxiliary Tables (Summary)
 
-Stores per-session filter/view state.
+| Table | Purpose | Linked To |
+|-------|---------|-----------|
+| `registration_youth` | YMHT (13-17) program data | `registrations` |
+| `registration_lmht` | BMHT/LMHT (4-12) program data | `registrations` |
+| `registration_bhakti` | Bhakti performance sign-ups | `registrations`, `persons` |
+| `special_needs_requests` | Accessibility/mobility requests | `registrations`, `persons` |
+| `translation_requests` | Language translation needs | `registrations`, `persons` |
+| `registration_exceptions` | Data quality exceptions (AC-no-GP, GP-no-12) | `persons` |
+| `dashboard_snapshots` | Pre-aggregated dashboard data (2024, 2025) | — |
+| `meal_aggregates` | Daily meal totals (2024) with conflict matrices | `events` |
 
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| `sessionId` | `string` | yes | Browser session identifier |
-| `selectedYears` | `array<number>` | no | Active year filters |
-| `selectedRegions` | `array<string>` | no | Active region filters |
-| `selectedRoomTypes` | `array<string>` | no | Active room type filters |
-| `dateRange` | `object` | no | `{ start: string, end: string }` |
-| `activeTab` | `string` | no | Last active dashboard tab |
-| `updatedAt` | `number` | yes | Timestamp |
+#### System Tables (Summary)
 
-### Recommended Indexes
+| Table | Purpose |
+|-------|---------|
+| `data_availability` | Documents what data exists per year per entity type |
+| `agent_jobs` | Tracks ETL pipeline runs (UUID PK, status, phase, progress, errors) |
+| `agent_job_steps` | Per-step tracking within a job |
+| `aggregation_cache` | Pre-computed JSONB payloads keyed by `cache_key` |
+| `user_preferences` | Per-session filter/view state (selected years, regions, active tab) |
 
-| Table | Index Fields | Purpose |
-|-------|-------------|---------|
-| `attendees` | `eventYear` | Filter attendees by year |
-| `attendees` | `email, eventYear` | Dedup lookups; returning attendee detection |
-| `attendees` | `region, eventYear` | Region breakdown queries |
-| `rooms` | `eventYear` | Filter rooms by year |
-| `rooms` | `roomType, eventYear` | Room type breakdown |
-| `rooms` | `checkInDate` | Occupancy heatmap queries |
-| `meals` | `eventYear` | Filter meals by year |
-| `meals` | `mealDate, eventYear` | Day-by-day demand queries |
-| `agent_jobs` | `status` | Find active/running jobs |
-| `aggregations` | `key` | Fast lookup by aggregation type |
-| `aggregations` | `dataType, eventYear` | Filter aggregations by scope |
-| `user_preferences` | `sessionId` | Session lookup |
+#### Reference Tables (Summary)
+
+| Table | Key Field | Seeded From |
+|-------|-----------|-------------|
+| `ref_regions` | `region_code` | Hardcoded mapping (7 US regions + India + ROW) |
+| `ref_centers` | `center_name` | Scanned from xlsx data across all years |
+| `ref_food_preferences` | `code` (R/J/RW/JW/W) | Hardcoded mapping |
+| `ref_room_types` | `type_code` | Scanned from xlsx data across all years |
+| `ref_age_groups` | `group_code` | Hardcoded mapping (2025 ranges + 2022 pivot codes) |
+| `ref_hotels` | `hotel_name` | Scanned from xlsx data across all years |
+
+### Indexes
+
+All indexes are defined in `db/schema.sql`. Key indexes include:
+
+| Table | Index | Purpose |
+|-------|-------|---------|
+| `persons` | `mahatma_id`, `family_id`, `(last_name, first_name)`, `center_id`, `region_id` | Person lookup and deduplication |
+| `registrations` | `event_year`, `(event_id, person_id)`, `arrival_date`, `(age_group_id, event_year)`, `(food_pref_id, event_year)` | Registration queries and filtering |
+| `rooms` | `event_year`, `check_in_date`, `(hotel_id, event_year)`, `(family_id, event_year)`, `(room_type_assigned_id, event_year)` | Room queries |
+| `meal_scans` | `event_year`, `(session_date, event_year)`, `person_id`, `(session_title, event_year)` | Meal scan queries |
+| System | `agent_jobs(status)`, `aggregation_cache(cache_key)`, `dashboard_snapshots(event_year, snapshot_type)` | System table lookups |
 
 ---
 
@@ -388,44 +408,35 @@ Stores per-session filter/view state.
 
 ```
 gpdash/
-├── frontend/                      # React + Vite application
+├── db/                            # Database schema (auto-executed by Docker initdb)
+│   └── schema.sql                 # Full PostgreSQL DDL (26 tables + indexes)
+│
+├── etl/                           # Python ETL pipeline
+│   ├── __init__.py
+│   ├── run.py                     # CLI entry point (argparse: --year, --seed-only, --reset, --verify)
+│   ├── db.py                      # DB connection, get_cursor(), get_or_create_person(), bulk_insert()
+│   ├── xlsx_utils.py              # open_workbook(), safe_str/int/float/date(), normalize_gender/food_pref()
+│   ├── seed.py                    # Reference table seeding (regions, centers, hotels, room types, etc.)
+│   ├── load_2022_2023.py          # Loader for 2022+2023 (identical 54-col structure)
+│   ├── load_2024.py               # Loader for 2024 (dashboard snapshots + scanning analysis)
+│   └── load_2025.py               # Loader for 2025 (10 sub-loaders: registrations, youth, bhakti, rooms, food, etc.)
+│
+├── frontend/                      # React + Vite application (to be built)
 │   ├── public/
-│   │   └── favicon.ico
 │   ├── src/
 │   │   ├── components/
-│   │   │   ├── layout/
-│   │   │   │   ├── Sidebar.tsx          # Year, region, room type, date range filters
-│   │   │   │   ├── Header.tsx           # App title, agent status badge
-│   │   │   │   └── TabNav.tsx           # 6-tab navigation
-│   │   │   ├── charts/
-│   │   │   │   ├── LineChart.tsx         # Reusable line chart wrapper
-│   │   │   │   ├── BarChart.tsx          # Reusable bar chart wrapper
-│   │   │   │   ├── HeatmapChart.tsx      # Occupancy heatmap
-│   │   │   │   └── KpiCard.tsx           # Single KPI display card
-│   │   │   ├── tabs/
-│   │   │   │   ├── OverviewTab.tsx       # KPI cards + agent status
-│   │   │   │   ├── RegistrationTab.tsx   # Registration trend charts
-│   │   │   │   ├── RoomTab.tsx           # Room allocation visuals
-│   │   │   │   ├── DiningTab.tsx         # Meal demand charts + export
-│   │   │   │   ├── AiInsightsTab.tsx     # Q&A panel
-│   │   │   │   └── RawDataTab.tsx        # Filterable table + CSV export
-│   │   │   ├── agent/
-│   │   │   │   ├── AgentStatusPanel.tsx   # Real-time progress display
-│   │   │   │   └── AgentRunButton.tsx     # Trigger agent run
-│   │   │   └── common/
-│   │   │       ├── DataGapBanner.tsx      # "No data available" indicator
-│   │   │       ├── ExportButton.tsx       # CSV export utility
-│   │   │       └── LoadingSpinner.tsx
+│   │   │   ├── layout/            # Sidebar, Header, TabNav
+│   │   │   ├── charts/            # LineChart, BarChart, HeatmapChart, KpiCard
+│   │   │   ├── tabs/              # OverviewTab, RegistrationTab, RoomTab, DiningTab, AiInsightsTab, RawDataTab
+│   │   │   ├── agent/             # AgentStatusPanel, AgentRunButton
+│   │   │   └── common/            # DataGapBanner, ExportButton, LoadingSpinner
 │   │   ├── hooks/
-│   │   │   ├── useConvex.ts              # Convex real-time subscription hooks
-│   │   │   ├── useFilters.ts             # Filter state management
-│   │   │   └── useApi.ts                 # Express API fetch hooks
+│   │   │   ├── useFilters.ts      # Filter state management
+│   │   │   └── useApi.ts          # Express API fetch hooks
 │   │   ├── lib/
-│   │   │   ├── api.ts                    # API client (base URL, error handling)
-│   │   │   ├── formatters.ts             # Date, number, percentage formatters
-│   │   │   └── constants.ts              # Color palette, tab names, etc.
-│   │   ├── convex/
-│   │   │   └── _generated/               # Convex codegen output
+│   │   │   ├── api.ts             # API client (base URL, error handling)
+│   │   │   ├── formatters.ts      # Date, number, percentage formatters
+│   │   │   └── constants.ts       # Color palette, tab names, etc.
 │   │   ├── App.tsx
 │   │   ├── main.tsx
 │   │   └── index.css
@@ -435,7 +446,7 @@ gpdash/
 │   ├── tsconfig.json
 │   └── package.json
 │
-├── server/                        # Node.js Express API
+├── server/                        # Node.js Express API (to be built)
 │   ├── src/
 │   │   ├── index.ts               # Express app entry point
 │   │   ├── routes/
@@ -446,7 +457,7 @@ gpdash/
 │   │   │   ├── agent.ts           # GET /api/agent/status, POST /api/agent/run
 │   │   │   └── ask.ts             # POST /api/ask
 │   │   ├── services/
-│   │   │   ├── convex.ts          # Convex client wrapper
+│   │   │   ├── db.ts              # PostgreSQL connection pool (node-postgres)
 │   │   │   ├── agent.ts           # Python subprocess management
 │   │   │   └── claude.ts          # Anthropic SDK wrapper for Q&A
 │   │   ├── middleware/
@@ -457,31 +468,6 @@ gpdash/
 │   ├── tsconfig.json
 │   └── package.json
 │
-├── agent/                         # Python ETL + analysis agent
-│   ├── main.py                    # Entry point — orchestrates all phases
-│   ├── discovery.py               # Phase 1: file inventory, schema inspection
-│   ├── cleaning.py                # Phase 2: normalize, deduplicate, merge
-│   ├── analysis.py                # Phase 3: trend analysis, cross-dataset insights
-│   ├── reporting.py               # Phase 3: generate markdown report via Claude
-│   ├── convex_client.py           # Convex Python SDK wrapper (read/write)
-│   ├── models.py                  # AI model abstraction (Claude + open model)
-│   ├── schema_mapping.py          # Column name mappings per year/file
-│   ├── utils.py                   # Date parsing, dedup, validation helpers
-│   ├── requirements.txt           # Python dependencies
-│   └── .python-version            # Python version pin (3.11+)
-│
-├── convex/                        # Convex schema and functions
-│   ├── schema.ts                  # Table definitions (7 tables)
-│   ├── events.ts                  # Query/mutation functions for events
-│   ├── attendees.ts               # Query/mutation functions for attendees
-│   ├── rooms.ts                   # Query/mutation functions for rooms
-│   ├── meals.ts                   # Query/mutation functions for meals
-│   ├── agentJobs.ts               # Query/mutation functions for agent_jobs
-│   ├── aggregations.ts            # Query/mutation functions for aggregations
-│   ├── userPreferences.ts         # Query/mutation functions for user_preferences
-│   ├── convex.json                # Convex project config
-│   └── tsconfig.json
-│
 ├── reports/                       # Agent-generated markdown reports (gitignored)
 ├── exports/                       # CSV/Excel backups (gitignored)
 ├── tmp/                           # Intermediate processing files (gitignored)
@@ -489,17 +475,22 @@ gpdash/
 ├── docs/
 │   ├── prompt.md                  # Original project prompt
 │   ├── PRD.md                     # This document
-│   └── event_docs/                # Raw source Excel files
+│   ├── db_design.md               # Detailed database design (entity mapping, discrepancy matrix, ER diagram)
+│   └── event_docs/                # Raw source Excel files (9 files, gitignored)
 │       ├── gp2022_registrations_and_room_pickups.xlsx
 │       ├── gp2022_food_preferences.xlsx
 │       ├── gp2023_event_registrations_and_room_pickups.xlsx
-│       ├── Gp2024_event_dashboard.xlsx
+│       ├── gp2024_event_dashboard.xlsx
+│       ├── gp2024_scanning_analysis.xlsx
+│       ├── gp2025_registrations.xlsx
 │       ├── gp2025_food_preferences.xlsx
-│       └── gp2025_room_analysis.xlsx
+│       ├── gp2025_room_analysis.xlsx
+│       └── gp2025_event_dashboard.xlsx
 │
+├── docker-compose.yml             # PostgreSQL 16-alpine container (port 5433)
+├── requirements.txt               # Python dependencies (openpyxl, psycopg2-binary, python-dotenv)
 ├── .env.example                   # Environment variable template
 ├── .gitignore
-├── package.json                   # Root workspace config (if monorepo)
 └── README.md
 ```
 
@@ -507,40 +498,38 @@ gpdash/
 
 ## 9. Phase-by-Phase Requirements
 
-### Phase 1 — Data Discovery & Inventory
+### Phase 1 — Data Discovery & Schema Design ✅ COMPLETE
 
-**Goal:** Understand every file before writing any transformation code.
+**Goal:** Understand every file, design normalized schema, and document data gaps.
 
-| # | Requirement | Acceptance Criteria |
-|---|------------|-------------------|
-| P1.1 | List all files in `docs/event_docs/` and classify by year and data type | Output table matches the 6-file inventory in Section 4 |
-| P1.2 | For each file, print shape, column names, data types, null counts, and 5 sample rows | Report generated for all 6 files with no crashes |
-| P1.3 | Identify column naming inconsistencies across years | Mapping table produced showing source column → unified column for each file |
-| P1.4 | Flag data quality issues: duplicates, missing keys, malformed dates, outlier values | Quality report lists all issues with counts and examples |
-| P1.5 | Inspect `Gp2024_event_dashboard.xlsx` to determine its structure and usability | Written assessment: which data types it covers, raw vs aggregated, schema-mappable or not |
-| P1.6 | Propose unified schema for registrations, rooms, and meals | Schema document with field names, types, and required/optional status |
-| P1.7 | Propose Convex table structure | Schema matches Section 7 of this PRD (after user confirmation) |
+| # | Requirement | Status | Notes |
+|---|------------|--------|-------|
+| P1.1 | Inventory all 9 files in `docs/event_docs/` by year and data type | ✅ | See Section 4 file inventory |
+| P1.2 | For each file, document shape, columns, data types, null counts | ✅ | Column mappings encoded in `etl/load_*.py` |
+| P1.3 | Identify column naming inconsistencies across years | ✅ | Full mapping in `docs/db_design.md` Section 1 |
+| P1.4 | Flag data quality issues: duplicates, missing keys, format variance | ✅ | Documented in `docs/db_design.md` Section 3 |
+| P1.5 | Inspect 2024 files to determine structure and usability | ✅ | 2024 is dashboard-only — no individual records |
+| P1.6 | Design normalized PostgreSQL schema (26 tables) | ✅ | DDL in `db/schema.sql`, design in `docs/db_design.md` |
+| P1.7 | Document data availability per year per entity type | ✅ | Discrepancy matrix in `docs/db_design.md` Section 3 |
 
-> **⏸ CHECKPOINT:** Pause after Phase 1. Show the user the proposed schema mapping AND Convex table structure. Do not proceed until confirmed.
+### Phase 2 — ETL Pipeline & Data Loading ✅ COMPLETE
 
-### Phase 2 — Data Cleaning & Normalization
+**Goal:** Build re-runnable Python ETL pipeline that normalizes and loads all data into PostgreSQL.
 
-**Goal:** Transform raw data into clean, queryable records in Convex DB.
-
-| # | Requirement | Acceptance Criteria |
-|---|------------|-------------------|
-| P2.1 | Standardize column names to confirmed unified schema | All columns match the mapping from P1.3 |
-| P2.2 | Parse and normalize all date fields to ISO 8601 | Zero malformed dates in output; `arrivalDate`, `departureDate`, `checkInDate`, `checkOutDate`, `mealDate` all in `YYYY-MM-DD` format |
-| P2.3 | Deduplicate records using defined composite key | Dedup key documented; duplicate count before/after reported |
-| P2.4 | Split combined files (2022, 2023) into separate registration and room records | `attendees` and `rooms` tables populated from files 1 and 3 |
-| P2.5 | Merge into single multi-year dataset with `year` column | Each record has `eventYear` field; all years represented |
-| P2.6 | Write cleaned data to Convex DB | Records appear in `attendees`, `rooms`, `meals` tables; counts match expected totals |
-| P2.7 | Update `agent_jobs` in Convex with progress at each step | Frontend shows live progress: phase name, current step, percentage |
-| P2.8 | Export local CSV/Excel backup of merged dataset | Files written to `exports/` directory; openable in Excel |
-| P2.9 | Print data quality summary (before and after) | Console output shows record counts, null rates, and issue counts pre- and post-cleaning |
-| P2.10 | Handle missing years gracefully | 2023 meals and 2025 registrations produce no records but log a clear warning; `events.dataGaps` populated |
-| P2.11 | Populate `events` table | One record per year (2022–2025) with cached counts and `dataGaps` |
-| P2.12 | Agent is re-runnable | Running the agent a second time clears and re-populates tables without duplicating data |
+| # | Requirement | Status | Notes |
+|---|------------|--------|-------|
+| P2.1 | Standardize column names to unified schema per year | ✅ | Mappings in `etl/load_2022_2023.py`, `etl/load_2025.py` |
+| P2.2 | Parse and normalize all date fields | ✅ | `etl/xlsx_utils.py` `safe_date()` handles multiple formats |
+| P2.3 | Deduplicate persons across years | ✅ | `MahatmaID` (2025) or `FamilyID+name` (2022/2023); 1,766 returning attendees detected |
+| P2.4 | Split combined 2022/2023 files into person + registration + room records | ✅ | Cols 1–44 → person+registration, cols 45–54 → rooms |
+| P2.5 | Seed reference tables from xlsx data | ✅ | `etl/seed.py` seeds regions, centers, hotels, room types, age groups, food prefs |
+| P2.6 | Write cleaned data to PostgreSQL (26 tables) | ✅ | ~170K total rows across all tables |
+| P2.7 | Track ETL progress in `agent_jobs` table | ✅ | Job steps tracked in `agent_job_steps` |
+| P2.8 | Handle 2024 as dashboard-only year (no individual data) | ✅ | Loads `dashboard_snapshots` + `meal_aggregates` only |
+| P2.9 | Handle 2023 food gap gracefully | ✅ | `data_availability` marks as `data_level = 'none'` |
+| P2.10 | Populate `events` table with cached totals | ✅ | Auto-updated after ETL run |
+| P2.11 | Merge room data from two overlapping 2025 sources | ✅ | `room_analysis` as primary, registrations Rooms sheet supplements |
+| P2.12 | Pipeline is re-runnable (`--reset` flag) | ✅ | `python -m etl.run --reset` clears and re-populates |
 
 ### Phase 3 — Trend Analysis
 
@@ -552,7 +541,7 @@ gpdash/
 | P3.2 | Room allocation trends: type distribution, occupancy, check-in/out clusters, utilization rate, rooms-per-attendee ratio | Charts or tables for each metric |
 | P3.3 | Food/dining trends: daily headcount, demand curve, preference breakdown, registered-vs-opted ratio, meals-per-attendee | Charts or tables for each metric; 2023 gap explicitly noted |
 | P3.4 | Cross-dataset insights: registration–room correlation, registered-but-no-room, booked-but-skipped-meals | At least 3 cross-dataset findings documented |
-| P3.5 | Pre-compute aggregations and write to `aggregations` table | Dashboard can render all charts from `aggregations` without re-querying raw data |
+| P3.5 | Pre-compute aggregations and write to `aggregation_cache` table | Dashboard can render all charts from cached aggregations without re-querying raw data |
 | P3.6 | Generate Claude-powered narrative report | `.md` file in `reports/` with: executive summary, stats tables, trend highlights, data quality notes |
 | P3.7 | Report file naming | File named `GP_Analysis_Report_[YYYYMMDD_HHMMSS].md` |
 
@@ -572,9 +561,9 @@ gpdash/
 | P4.6 | Dashboard: Dining & Kitchen Planning tab | Day-by-day meal demand chart, preference breakdown, exportable headcount table |
 | P4.7 | Dashboard: AI Insights tab | User types question → Claude responds with contextual answer inline |
 | P4.8 | Dashboard: Raw Data Explorer tab | Filterable table showing merged dataset; CSV export button |
-| P4.9 | Data gap indicators | Tabs and charts for missing data (2023 food, 2025 registrations) show a clear "Data Not Available" banner, not empty/broken charts |
+| P4.9 | Data gap indicators | Tabs and charts for missing data (2023 food, 2024 individual records) show a clear "Data Not Available" banner, not empty/broken charts |
 | P4.10 | Design: clean, non-technical | Consistent color scheme, clear labels, hover tooltips on all charts; usable by event coordinators |
-| P4.11 | Convex real-time subscriptions | Dashboard auto-updates when agent writes new data — no manual refresh needed |
+| P4.11 | Agent status polling | Dashboard polls `GET /api/agent/status` during active runs; refreshes data after completion |
 
 ---
 
@@ -952,8 +941,8 @@ When the question cannot be answered due to missing data:
 | Element | Type | Behavior |
 |---------|------|----------|
 | Year selector | Multi-select checkboxes | Options: 2022, 2023, 2024, 2025. Default: all selected. Updating filters re-fetches data for all visible charts. |
-| Region filter | Multi-select dropdown | Options populated from `attendees.region` distinct values. Default: all. |
-| Room type filter | Multi-select dropdown | Options populated from `rooms.roomType` distinct values. Default: all. |
+| Region filter | Multi-select dropdown | Options populated from `ref_regions` table. Default: all. |
+| Room type filter | Multi-select dropdown | Options populated from `ref_room_types` table. Default: all. |
 | Date range slider | Dual-handle range slider | Range spans earliest to latest date across all data. Filters arrival/check-in/meal dates. |
 | Reset filters button | Button | Resets all filters to defaults. |
 
@@ -962,7 +951,7 @@ When the question cannot be answered due to missing data:
 | Element | Type | Behavior |
 |---------|------|----------|
 | App title | Text | "GP Event Analytics Dashboard" |
-| Agent status badge | Colored badge | Green = idle/completed, Yellow = running, Red = failed. Clicking navigates to Overview tab agent panel. Real-time via Convex subscription. |
+| Agent status badge | Colored badge | Green = idle/completed, Yellow = running, Red = failed. Clicking navigates to Overview tab agent panel. Polled via `GET /api/agent/status`. |
 
 ---
 
@@ -974,28 +963,28 @@ When the question cannot be answered due to missing data:
 | Total Room Nights KPI | Card | `GET /api/summary` → `totalRoomNights` | Large number with sparkline |
 | Average Daily Meals KPI | Card | `GET /api/summary` → `averageDailyMeals` | Large number; shows "Partial data" footnote if 2023 food missing |
 | YoY Growth % KPI | Card | `GET /api/summary` → `yoyGrowthPercent` | Percentage with up/down arrow indicator |
-| Agent Status Panel | Panel | Convex real-time subscription to `agent_jobs` | Shows: current status, phase, progress bar, current step, files processed list, errors. Includes "Run Agent" button. |
-| Data Gaps Summary | Banner | `GET /api/summary` → `byYear[].dataGaps` | Amber banner listing: "2023: Food data missing. 2025: Registration data missing." |
+| Agent Status Panel | Panel | Polled via `GET /api/agent/status` | Shows: current status, phase, progress bar, current step, files processed list, errors. Includes "Run Agent" button. |
+| Data Gaps Summary | Banner | `GET /api/summary` → `byYear[].dataGaps` | Amber banner listing: "2023: Food data missing. 2024: Individual records unavailable (dashboard aggregates only)." |
 
 ### Tab 2: Registration Trends
 
 | Element | Type | Data Source | Behavior |
 |---------|------|-------------|----------|
-| Registrations by Year | Bar chart (Recharts `BarChart`) | `aggregations` table, key `registrations_by_year` | One bar per year. Color-coded. Hover tooltip shows exact count. |
-| Registrations by Region | Stacked bar chart | `aggregations` table, key `registrations_by_region` | Stacked by region within each year. Legend shows region colors. |
-| New vs Returning Attendees | Grouped bar chart | `aggregations` table, key `new_vs_returning` | Two bars per year: new (blue) and returning (green). |
-| Arrival Date Distribution | Line chart | `aggregations` table, key `arrival_distribution` | X-axis: event-relative day; Y-axis: arrivals. One line per year. |
-| Length of Stay Histogram | Bar chart | Computed from `attendees.lengthOfStay` | X-axis: days (1–10+); Y-axis: count. |
-| Special Needs Trend | Small line chart | `aggregations` table | Count of `specialNeeds IS NOT NULL` per year. |
-| Missing Year Banner | `DataGapBanner` | n/a | If 2025 registrations gap active: "2025 registration data is not available." |
+| Registrations by Year | Bar chart (Recharts `BarChart`) | `aggregation_cache` table, key `registrations_by_year` | One bar per year. Color-coded. Hover tooltip shows exact count. |
+| Registrations by Region | Stacked bar chart | `aggregation_cache` table, key `registrations_by_region` | Stacked by region within each year. Legend shows region colors. |
+| New vs Returning Attendees | Grouped bar chart | `aggregation_cache` table, key `new_vs_returning` | Two bars per year: new (blue) and returning (green). |
+| Arrival Date Distribution | Line chart | `aggregation_cache` table, key `arrival_distribution` | X-axis: event-relative day; Y-axis: arrivals. One line per year. |
+| Length of Stay Histogram | Bar chart | Computed from `registrations.length_of_stay` | X-axis: days (1–10+); Y-axis: count. |
+| Special Needs Trend | Small line chart | `aggregation_cache` table | Count of `specialNeeds IS NOT NULL` per year. |
+| Missing Year Banner | `DataGapBanner` | n/a | If 2024 individual data gap active: "2024 individual registration data is not available — only aggregate totals." |
 
 ### Tab 3: Room Allocation
 
 | Element | Type | Data Source | Behavior |
 |---------|------|-------------|----------|
 | Occupancy Heatmap | Heatmap (custom Recharts or Chart.js matrix) | `rooms` table, grouped by date × room type | X-axis: dates; Y-axis: room types; color intensity = occupancy count. Hover shows exact numbers. |
-| Room Type Distribution | Pie/donut chart | `aggregations` table, key `room_type_distribution` | One chart per selected year, or combined. |
-| Utilization Rate by Year | Line chart | `aggregations` table, key `room_utilization` | Y-axis: utilization % (rooms used / rooms available). One point per year. |
+| Room Type Distribution | Pie/donut chart | `aggregation_cache` table, key `room_type_distribution` | One chart per selected year, or combined. |
+| Utilization Rate by Year | Line chart | `aggregation_cache` table, key `room_utilization` | Y-axis: utilization % (rooms used / rooms available). One point per year. |
 | Rooms per Attendee Ratio | Line chart | Computed: `COUNT(rooms) / COUNT(attendees)` per year | Shows trend of room density. |
 | Check-in/Check-out Clusters | Dual bar chart | `rooms` grouped by date | Two series: check-ins and check-outs by date. Peak days highlighted. |
 
@@ -1003,11 +992,11 @@ When the question cannot be answered due to missing data:
 
 | Element | Type | Data Source | Behavior |
 |---------|------|-------------|----------|
-| Daily Meal Headcount | Line chart | `aggregations` table, key `daily_meal_headcount` | One line per year. X-axis: event day; Y-axis: total headcount. |
+| Daily Meal Headcount | Line chart | `aggregation_cache` table, key `daily_meal_headcount` | One line per year. X-axis: event day; Y-axis: total headcount. |
 | Meal Demand Curve | Area chart | Same data, smoothed | Highlights peak-demand days. |
-| Food Preference Breakdown | Horizontal bar chart | `aggregations` table, key `meal_preferences` | Bars for each preference (Vegetarian, Vegan, etc.) by count. |
-| Registered vs Opted-In Ratio | Grouped bar chart | Cross-query: `attendees.count` vs `meals.count(distinct attendeeEmail)` per year | Shows drop-off between registration and meal opt-in. |
-| Kitchen Headcount Table | Sortable table | `meals` grouped by `mealDate, mealType` | Columns: Date, Meal Type, Headcount, Year. |
+| Food Preference Breakdown | Horizontal bar chart | `aggregation_cache` table, key `meal_preferences` | Bars for each preference (Vegetarian, Vegan, etc.) by count. |
+| Registered vs Opted-In Ratio | Grouped bar chart | Cross-query: `registrations` count vs `meal_scans` distinct persons per year | Shows drop-off between registration and meal opt-in. |
+| Kitchen Headcount Table | Sortable table | `meal_scans` / `meal_aggregates` grouped by date and session | Columns: Date, Meal Type, Headcount, Year. |
 | Export Headcount Button | Button | Above table data | Exports the table to CSV. Filename: `kitchen_headcount_[date].csv`. |
 | Missing Year Banner | `DataGapBanner` | n/a | "2023 food preference data is not available." |
 
@@ -1067,7 +1056,7 @@ Model selection is configurable via environment variables so it can be swapped w
 
 When a user submits a question via `POST /api/ask`:
 
-1. **Query Convex** — The Express server queries relevant data from Convex based on the question and optional year filter. It pulls from `aggregations` first (fast), then from raw tables if needed.
+1. **Query PostgreSQL** — The Express server queries relevant data from PostgreSQL based on the question and optional year filter. It pulls from `aggregation_cache` first (fast), then from core/aux tables if needed.
 2. **Build context** — Construct a context block containing:
    - Summary statistics for the scoped years
    - Relevant aggregation payloads
@@ -1129,7 +1118,7 @@ User Question: {question}
 | API response time (summary, aggregations) | < 200 ms |
 | API response time (paginated raw data) | < 500 ms |
 | AI Q&A response time | < 10 seconds (depends on Claude API latency) |
-| Agent full pipeline (6 files) | < 5 minutes |
+| ETL full pipeline (9 files) | < 2 minutes (measured: ~78 seconds) |
 | CSV export (full dataset) | < 3 seconds |
 
 ### Security
@@ -1154,7 +1143,7 @@ User Question: {question}
 
 - Agent failures are captured and surfaced in `agent_jobs.errors`, not silently swallowed.
 - Agent is idempotent — re-running clears previous data and re-processes.
-- If Convex is unreachable, the Express API returns a clear error rather than hanging.
+- If PostgreSQL is unreachable, the Express API returns a clear error rather than hanging.
 - Frontend handles API errors gracefully with user-friendly messages.
 
 ### Maintainability
@@ -1162,7 +1151,7 @@ User Question: {question}
 - Modular, well-commented code (per prompt requirement).
 - Each concern (frontend, API, agent, database) in its own directory.
 - Adding a new year's data requires only placing files in `docs/event_docs/` and re-running the agent — no code changes needed.
-- Column mapping defined in a single file (`agent/schema_mapping.py`) for easy updates.
+- Column mappings are defined in per-year loader files (`etl/load_2022_2023.py`, `etl/load_2025.py`) with shared utilities in `etl/xlsx_utils.py`.
 
 ---
 
@@ -1174,7 +1163,7 @@ User Question: {question}
 | R2 | Column naming is so inconsistent that automated mapping fails | Medium | Medium — delays Phase 2 | Phase 1 produces a full column inventory. Mapping is confirmed by user before Phase 2. Fallback: manual mapping in `schema_mapping.py`. |
 | R3 | Duplicate records inflate counts | Medium | Medium — incorrect KPIs | Define dedup key (email + year) in Phase 1. Report duplicate counts before and after cleaning. |
 | R4 | Large file (5.1 MB `gp2025_food_preferences.xlsx`) causes memory issues | Low | Medium — agent crashes | Use pandas chunked reading. Monitor memory. Set a file size warning threshold (10 MB). |
-| R5 | Convex free-tier limits exceeded | Low | High — data write failures | Monitor record counts during Phase 2. If approaching limits, implement batched writes. Document Convex tier limits. |
+| R5 | Docker Desktop not available on user's machine | Low | High — no database | Provide clear Docker install instructions in README. Alternative: user installs PostgreSQL natively and runs `db/schema.sql` manually. |
 | R6 | Claude API rate limits or downtime during Phase 3 / Q&A | Low | Medium — delayed analysis or Q&A unavailable | Implement retry with exponential backoff. Cache report output locally so it only needs to be generated once. Q&A shows "Service temporarily unavailable" message. |
 | R7 | No returning-attendee tracking possible (emails missing or inconsistent) | Medium | Low — one analysis feature unavailable | If email coverage is < 50%, disable "New vs Returning" chart and note in data quality report. |
 | R8 | Date formats are unparseable across files | Low | High — date-dependent analysis broken | Phase 1 samples and catalogs all date formats. Use `dateutil.parser` with multiple fallback formats. Log unparseable dates rather than crashing. |
@@ -1188,19 +1177,19 @@ User Question: {question}
 
 | # | Metric | Target | Measurement |
 |---|--------|--------|-------------|
-| T1 | Data coverage | All 6 files ingested; all mappable years present in Convex | Count records per year per table after Phase 2 |
+| T1 | Data coverage | All 9 files ingested; all mappable years present in PostgreSQL | Count records per year per table after ETL run |
 | T2 | Data quality | < 1% null rate on required fields after cleaning | Agent quality report (Phase 2) |
 | T3 | API reliability | All 7 endpoints return valid JSON with no 500 errors under normal use | Manual testing of each endpoint |
 | T4 | Dashboard completeness | All 6 tabs render with correct data | Visual inspection against Section 11 specs |
 | T5 | Agent re-runnability | Agent can be triggered twice with identical output | Run agent, check DB; re-run agent, verify DB matches |
-| T6 | Real-time updates | Dashboard reflects agent-written data within 2 seconds | Observe dashboard during agent run |
+| T6 | Agent status polling | Dashboard reflects agent status updates within 5 seconds via polling | Observe dashboard during agent run |
 
 ### User-Facing Metrics
 
 | # | Metric | Target | Measurement |
 |---|--------|--------|-------------|
 | U1 | Time to first insight | User sees populated dashboard < 10 minutes after initial setup | End-to-end timing: install → agent run → dashboard loads |
-| U2 | Data gap transparency | Every missing data point has a visible indicator | Review all tabs for 2023 food and 2025 registration gaps |
+| U2 | Data gap transparency | Every missing data point has a visible indicator | Review all tabs for 2023 food and 2024 individual data gaps |
 | U3 | Export usability | Exported CSV opens correctly in Excel with proper formatting | Open exports in Excel; verify columns, dates, special characters |
 | U4 | AI Q&A accuracy | Claude answers are factually grounded in the data — no hallucinated numbers | Test 10 questions; verify each answer against raw data |
 
@@ -1228,9 +1217,11 @@ The following items are explicitly **out of scope** for the initial build but do
 ## Appendix A: `.env.example` Template
 
 ```bash
-# ── Convex ─────────────────────────────────────────────
-CONVEX_URL=https://your-project.convex.cloud
-CONVEX_DEPLOY_KEY=prod:your-deploy-key
+# ── PostgreSQL ─────────────────────────────────────────
+DATABASE_URL=postgresql://gpdash:gpdash_dev@localhost:5433/gpdash
+
+# ── Data ───────────────────────────────────────────────
+DATA_DIR=./docs/event_docs
 
 # ── Anthropic (Claude) ────────────────────────────────
 ANTHROPIC_API_KEY=sk-ant-api03-xxxxxxxxxxxx
@@ -1249,10 +1240,8 @@ API_HOST=localhost
 
 # ── Frontend ───────────────────────────────────────────
 VITE_API_URL=http://localhost:3001/api
-VITE_CONVEX_URL=https://your-project.convex.cloud
 
 # ── Agent ──────────────────────────────────────────────
-DATA_DIR=./docs/event_docs
 REPORTS_DIR=./reports
 EXPORTS_DIR=./exports
 TMP_DIR=./tmp
@@ -1262,23 +1251,24 @@ TMP_DIR=./tmp
 
 ## Appendix B: File-to-Table Mapping
 
-This table maps each source file to the Convex tables it populates after ETL.
+This table maps each source file to the PostgreSQL tables it populates after ETL.
 
-| Source File | Year | → `events` | → `attendees` | → `rooms` | → `meals` |
-|-------------|------|:----------:|:--------------:|:---------:|:---------:|
-| `gp2022_registrations_and_room_pickups.xlsx` | 2022 | ✅ | ✅ | ✅ | — |
-| `gp2022_food_preferences.xlsx` | 2022 | — | — | — | ✅ |
-| `gp2023_event_registrations_and_room_pickups.xlsx` | 2023 | ✅ | ✅ | ✅ | — |
-| `Gp2024_event_dashboard.xlsx` | 2024 | ✅ | ❓ | ❓ | ❓ |
-| `gp2025_food_preferences.xlsx` | 2025 | — | — | — | ✅ |
-| `gp2025_room_analysis.xlsx` | 2025 | ✅ | — | ✅ | — |
+| Source File | Year | → `persons` / `registrations` | → `rooms` | → `meal_scans` / `meal_aggregates` | → `dashboard_snapshots` | → Aux Tables |
+|-------------|------|:---:|:---:|:---:|:---:|:---:|
+| `gp2022_registrations_and_room_pickups.xlsx` | 2022 | ✅ | ✅ | — | — | — |
+| `gp2022_food_preferences.xlsx` | 2022 | — | — | ✅ `meal_scans` | — | — |
+| `gp2023_event_registrations_and_room_pickups.xlsx` | 2023 | ✅ | ✅ | — | — | — |
+| `gp2024_event_dashboard.xlsx` | 2024 | — | — | — | ✅ | — |
+| `gp2024_scanning_analysis.xlsx` | 2024 | — | — | ✅ `meal_aggregates` | — | — |
+| `gp2025_registrations.xlsx` | 2025 | ✅ | ✅ | — | — | ✅ youth, LMHT, bhakti, special needs, translation, exceptions |
+| `gp2025_food_preferences.xlsx` | 2025 | — | — | ✅ `meal_scans` | — | — |
+| `gp2025_room_analysis.xlsx` | 2025 | — | ✅ | — | — | — |
+| `gp2025_event_dashboard.xlsx` | 2025 | — | — | — | ✅ | — |
 
-**Legend:** ✅ = populates this table, — = does not contribute, ❓ = depends on Phase 1 inspection of file structure.
-
-**Gaps by table:**
-- `attendees`: Missing 2025 registrations. 2024 uncertain.
-- `rooms`: 2024 uncertain.
-- `meals`: Missing 2023 food. 2024 uncertain.
+**Known gaps:**
+- `persons` / `registrations`: No individual data for 2024 (dashboard aggregates only)
+- `meal_scans`: No food data for 2023 at all
+- `rooms`: No individual data for 2024
 
 ---
 
@@ -1288,17 +1278,17 @@ This table maps each source file to the Convex tables it populates after ETL.
 |------|-----------|
 | **GP** | Guru Purnima — an annual spiritual/cultural event. The subject of all data in this project. |
 | **ETL** | Extract, Transform, Load — the process of reading raw data files, cleaning/normalizing them, and writing to the database. Performed by the Python agent. |
-| **Agent** | The Python background process (`agent/main.py`) that handles data discovery, cleaning, analysis, and report generation. Spawned by the Express API as a subprocess. |
-| **Convex** | A real-time backend-as-a-service database. Used for storing cleaned data, agent status, aggregations, and user preferences. Supports real-time subscriptions via WebSocket. |
+| **Agent / ETL Pipeline** | The Python ETL pipeline (`etl/run.py`) that reads xlsx files, normalizes data, and loads into PostgreSQL. Can be run via CLI or spawned by the Express API as a subprocess. |
+| **PostgreSQL** | An open-source relational database. Used locally via Docker (port 5433) to store all cleaned data across 26 normalized tables. |
 | **KPI** | Key Performance Indicator — a high-level summary metric (e.g., total registrations, YoY growth %). Displayed on the Overview tab. |
 | **YoY** | Year-over-Year — comparison of a metric between consecutive years (e.g., 2023 vs 2024). |
-| **Data gap** | A year × data-type combination for which no source file exists (e.g., 2023 food, 2025 registrations). Must be displayed as "Data Not Available" in the dashboard, never as an empty chart. |
+| **Data gap** | A year × data-type combination for which no source data exists (e.g., 2023 food, 2024 individual records). Tracked in `data_availability` table. Must be displayed as "Data Not Available" in the dashboard, never as an empty chart. |
 | **Room night** | One room occupied for one night. A 3-night stay = 3 room nights. Used as a standard measure of accommodation demand. |
 | **Headcount** | The number of people expected for a specific meal on a specific day. Used by the kitchen/dining team for planning. |
 | **Ollama** | A local runtime for open-source LLMs. Used as the open model provider for batch classification and labeling tasks. |
 | **Recharts** | A React-native charting library built on D3. The primary visualization library for the dashboard (as specified in the prompt). |
-| **Real-time subscription** | A Convex feature where the frontend receives live updates when database records change, without polling. Used for agent progress display. |
-| **Unified schema** | The standardized field names and types that all years' data is mapped to during Phase 2 (e.g., "First Name" / "fname" / "FirstName" all become `firstName`). |
+| **Normalized schema** | The standardized 26-table PostgreSQL schema that all years' data is mapped to during ETL. Column name variations across years (e.g., `Gender` / `GenderMF`, `regionID` / `Region`) are resolved to consistent fields. |
+| **Docker Compose** | Container orchestration tool used to run PostgreSQL locally. Configuration in `docker-compose.yml`. |
 
 ---
 
