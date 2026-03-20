@@ -22,6 +22,7 @@ from .seed import run_seed
 from .load_2022_2023 import load_year as load_2022_2023
 from .load_2024 import load_year_2024
 from .load_2025 import load_year_2025
+from .generate_mock import generate_all_mock, clean_mock_data
 
 logging.basicConfig(
     level=logging.INFO,
@@ -87,7 +88,7 @@ def update_event_totals():
             UPDATE events e SET
                 total_registrations = (SELECT COUNT(*) FROM registrations r WHERE r.event_id = e.event_id),
                 total_room_bookings = (SELECT COUNT(*) FROM rooms r WHERE r.event_id = e.event_id),
-                total_meal_scans = (SELECT COUNT(*) FROM meal_scans m WHERE m.event_id = e.event_id),
+                total_meal_scans = COALESCE((SELECT SUM(food_count) FROM meal_scans m WHERE m.event_id = e.event_id), 0),
                 updated_at = NOW()
         """)
     log.info("Event totals updated.")
@@ -160,7 +161,23 @@ def main():
     parser.add_argument("--verify", action="store_true", help="Run verification queries only")
     parser.add_argument("--reset", action="store_true", help="Drop and recreate all tables")
     parser.add_argument("--no-seed", action="store_true", help="Skip reference seeding")
+    parser.add_argument("--mock", action="store_true", help="Generate mock data for gaps")
+    parser.add_argument("--clean-mock", action="store_true", help="Remove all mock data")
     args = parser.parse_args()
+
+    if args.clean_mock:
+        from .db import get_cursor as _gc
+        with _gc() as cur:
+            clean_mock_data(cur)
+        update_event_totals()
+        verify()
+        return
+
+    if args.mock:
+        generate_all_mock()
+        update_event_totals()
+        verify()
+        return
 
     if args.verify:
         verify()
