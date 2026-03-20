@@ -37,10 +37,19 @@ CREATE TABLE ref_food_preferences (
     created_at      TIMESTAMPTZ DEFAULT NOW()
 );
 
+CREATE TABLE ref_room_categories (
+    category_id     SERIAL PRIMARY KEY,
+    category_code   VARCHAR(20) UNIQUE NOT NULL,
+    category_name   VARCHAR(80) NOT NULL,
+    display_order   SMALLINT NOT NULL DEFAULT 0,
+    created_at      TIMESTAMPTZ DEFAULT NOW()
+);
+
 CREATE TABLE ref_room_types (
     room_type_id    SERIAL PRIMARY KEY,
     type_code       VARCHAR(50) UNIQUE NOT NULL,
     type_name       VARCHAR(100) NOT NULL,
+    category_id     INTEGER NOT NULL REFERENCES ref_room_categories(category_id),
     created_at      TIMESTAMPTZ DEFAULT NOW()
 );
 
@@ -429,6 +438,7 @@ CREATE INDEX idx_rooms_check_in ON rooms(check_in_date);
 CREATE INDEX idx_rooms_hotel ON rooms(hotel_id, event_year);
 CREATE INDEX idx_rooms_family ON rooms(family_id, event_year);
 CREATE INDEX idx_rooms_type_assigned ON rooms(room_type_assigned_id, event_year);
+CREATE INDEX idx_room_types_category ON ref_room_types(category_id);
 
 -- room_occupants
 CREATE INDEX idx_room_occupants_room ON room_occupants(room_id);
