@@ -8,7 +8,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://gpdash:gpdash_dev@localhost:5433/gpdash")
+DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://gpdash:gpdash_dev@localhost:5434/gpdash")
 
 
 def get_connection():

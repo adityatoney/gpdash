@@ -16,7 +16,8 @@ import mealsRouter from './routes/meals';
 import agentRouter from './routes/agent';
 
 const app = express();
-const PORT = process.env.API_PORT ? parseInt(process.env.API_PORT, 10) : 3001;
+const PORT = process.env.API_PORT ? parseInt(process.env.API_PORT, 10) : 3002;
+const HOST = process.env.API_HOST || '0.0.0.0';
 
 // Middleware
 app.use(corsMiddleware);
@@ -42,8 +43,8 @@ app.use('/api/agent', agentRouter);
 // Error handler (must be last)
 app.use(errorHandler);
 
-app.listen(PORT, () => {
-  console.log(`gpdash API server listening on http://localhost:${PORT}`);
+app.listen(PORT, HOST, () => {
+  console.log(`gpdash API server listening on http://${HOST}:${PORT}`);
 });
 
 export default app;

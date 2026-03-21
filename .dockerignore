@@ -1,0 +1,9 @@
+node_modules
+dist
+.git
+.env
+*.md
+docs/event_docs
+__pycache__
+*.pyc
+.venv
