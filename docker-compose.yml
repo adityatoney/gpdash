@@ -7,9 +7,9 @@ services:
       POSTGRES_USER: gpdash
       POSTGRES_PASSWORD: gpdash_dev
     ports:
-      - "5434:5432"
+      - "${GPDASH_PORT_DB:-10310}:5432"
     volumes:
-      - pgdata:/var/lib/postgresql/data
+      - ${SSD_DATA}/gpdash/postgres:/var/lib/postgresql/data
       - ./db:/docker-entrypoint-initdb.d
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U gpdash"]
@@ -28,24 +28,22 @@ services:
       API_HOST: "0.0.0.0"
       NODE_ENV: production
     ports:
-      - "3002:3002"
+      - "${GPDASH_PORT_SERVER:-10311}:3002"
     depends_on:
       postgres:
         condition: service_healthy
     restart: unless-stopped
 
   frontend:
+    profiles: [prod]
     build:
       context: ./frontend
       dockerfile: Dockerfile
       args:
-        VITE_API_URL: http://localhost:3002/api
+        VITE_API_URL: http://localhost:${GPDASH_PORT_SERVER:-10311}/api
     container_name: gpdash-frontend
     ports:
-      - "8081:80"
+      - "${GPDASH_PORT_FRONTEND:-10313}:80"
     depends_on:
       - server
     restart: unless-stopped
-
-volumes:
-  pgdata:
